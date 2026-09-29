@@ -12,6 +12,7 @@ function makePool(): Pool {
     user: process.env.DB_USER || "root",
     password: process.env.DB_PASSWORD || "",
     database: process.env.DB_NAME || "db_concert",
+    ssl: process.env.DB_SSL === "true" ? { minVersion: "TLSv1.2" } : undefined,
     charset: "utf8mb4",
     waitForConnections: true,
     connectionLimit: 10,
