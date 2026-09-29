@@ -1,23 +1,33 @@
-import mysql, { type Pool, type PoolConnection, type ResultSetHeader, type RowDataPacket } from "mysql2/promise";
+import { Pool, types, type PoolClient, type QueryResult, type QueryResultRow } from "pg";
 
 declare global {
   // eslint-disable-next-line no-var
   var melodytixPool: Pool | undefined;
 }
 
+// Legacy event and order timestamps are Bangkok wall times. Return those
+// PostgreSQL values as strings so models.ts can apply Asia/Bangkok explicitly.
+types.setTypeParser(types.builtins.TIMESTAMP, (value) => value);
+types.setTypeParser(types.builtins.TIMESTAMPTZ, (value) => new Date(value).toISOString());
+
+export function postgresConnectionString(value: string): string {
+  const url = new URL(value);
+  // Neon supplies sslmode=require. pg currently interprets it as verify-full,
+  // but its next major version will weaken that alias. Keep certificate checks.
+  if (url.searchParams.get("sslmode") === "require") {
+    url.searchParams.set("sslmode", "verify-full");
+  }
+  return url.toString();
+}
+
 function makePool(): Pool {
-  return mysql.createPool({
-    host: process.env.DB_HOST || "127.0.0.1",
-    port: Number(process.env.DB_PORT || 3306),
-    user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
-    database: process.env.DB_NAME || "db_concert",
-    ssl: process.env.DB_SSL === "true" ? { minVersion: "TLSv1.2" } : undefined,
-    charset: "utf8mb4",
-    waitForConnections: true,
-    connectionLimit: 10,
-    dateStrings: true,
-    decimalNumbers: true,
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("DATABASE_URL is required for PostgreSQL.");
+  return new Pool({
+    connectionString: postgresConnectionString(connectionString),
+    max: 5,
+    connectionTimeoutMillis: 10_000,
+    idleTimeoutMillis: 10_000,
   });
 }
 
@@ -26,4 +36,4 @@ export function db(): Pool {
   return globalThis.melodytixPool;
 }
 
-export type { PoolConnection, ResultSetHeader, RowDataPacket };
+export type { PoolClient, QueryResult, QueryResultRow };

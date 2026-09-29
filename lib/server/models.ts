@@ -1,5 +1,4 @@
-import type { RowDataPacket } from "mysql2";
-import { db } from "./db";
+import { db, type QueryResultRow } from "./db";
 
 export type Event = {
   id: number;
@@ -26,7 +25,7 @@ export type Order = {
   user?: { id: number | null; name: string; username: string; email: string };
 };
 
-export type EventRow = RowDataPacket & {
+export type EventRow = QueryResultRow & {
   id: number;
   nama_konser: string;
   waktu: string;
@@ -42,7 +41,7 @@ export type EventRow = RowDataPacket & {
   is_active: number;
 };
 
-export type OrderRow = RowDataPacket & {
+export type OrderRow = QueryResultRow & {
   idpesanan: number;
   user_id: number | null;
   event_id: number | null;
@@ -84,27 +83,27 @@ export function toEvent(row: EventRow): Event {
 }
 
 export async function getEvent(id: number, includeInactive = false): Promise<EventRow | null> {
-  const [rows] = await db().execute<EventRow[]>(
-    `SELECT * FROM keranjang WHERE id=? ${includeInactive ? "" : "AND is_active=1"} LIMIT 1`,
+  const { rows } = await db().query<EventRow>(
+    `SELECT * FROM keranjang WHERE id=$1 ${includeInactive ? "" : "AND is_active=1"} LIMIT 1`,
     [id],
   );
   return rows[0] || null;
 }
 
 export async function listOrders(whereSql = "", params: (string | number)[] = []): Promise<Order[]> {
-  const [rows] = await db().execute<OrderRow[]>(
+  const { rows } = await db().query<OrderRow>(
     `SELECT p.idpesanan,p.user_id,p.event_id,p.username,p.nama_konser,p.quantity,
       p.total_harga,p.tanggal_pembelian,p.status,p.tipe_file,p.proof_name,p.stock_reserved,
       u.nama AS buyer_name,u.email AS buyer_email
-      FROM pesanan p LEFT JOIN user u ON u.id=p.user_id
+      FROM pesanan p LEFT JOIN "user" u ON u.id=p.user_id
       ${whereSql} ORDER BY p.tanggal_pembelian DESC,p.idpesanan DESC`,
     params,
   );
   const ids = [...new Set(rows.map((row) => row.event_id).filter((id): id is number => id !== null))];
   const events = new Map<number, Event>();
   if (ids.length) {
-    const [eventRows] = await db().query<EventRow[]>(
-      `SELECT * FROM keranjang WHERE id IN (${ids.map(() => "?").join(",")})`,
+    const { rows: eventRows } = await db().query<EventRow>(
+      `SELECT * FROM keranjang WHERE id IN (${ids.map((_, index) => `$${index + 1}`).join(",")})`,
       ids,
     );
     for (const row of eventRows) events.set(row.id, toEvent(row));
@@ -141,10 +140,10 @@ export async function listOrders(whereSql = "", params: (string | number)[] = []
 }
 
 export async function getOrder(id: number): Promise<Order | null> {
-  return (await listOrders("WHERE p.idpesanan=?", [id]))[0] || null;
+  return (await listOrders("WHERE p.idpesanan=$1", [id]))[0] || null;
 }
 
-export function toMysqlBangkok(date: Date): string {
+export function toBangkokTimestamp(date: Date): string {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Bangkok", year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",

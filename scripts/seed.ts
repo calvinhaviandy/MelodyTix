@@ -1,16 +1,17 @@
 import { loadEnvConfig } from "@next/env";
 import bcrypt from "bcryptjs";
-import mysql, { type RowDataPacket } from "mysql2/promise";
+import { Client } from "pg";
+import { postgresConnectionString } from "../lib/server/db";
 
 loadEnvConfig(process.cwd());
 
 const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase() || "";
 const adminPassword = process.env.ADMIN_PASSWORD || "";
 if (!adminEmail || !adminPassword || adminPassword.length < 8) {
-  throw new Error("Set ADMIN_EMAIL and ADMIN_PASSWORD (minimum 8 characters) in .env.local before seeding.");
+  throw new Error("Set ADMIN_EMAIL and ADMIN_PASSWORD (minimum 8 characters) before seeding.");
 }
 
-type UserRow = RowDataPacket & { id: number; level: string };
+type UserRow = { id: number; level: string };
 
 const demos = [
   { title: "[DEMO] Sheila on 7 — Menjemput Mimpi", days: 35, city: "Jakarta", venue: "Istora Senayan", image: "sheila.jpg", price: 425000, stock: 160, featured: true, description: "Malam penuh lagu yang tumbuh bersama kita. Saksikan pertunjukan demo Sheila on 7 dengan energi panggung dan singalong yang tak terlupakan." },
@@ -32,66 +33,65 @@ function bangkokDatetime(daysAhead: number): string {
 }
 
 async function main(): Promise<void> {
-  const connection = await mysql.createConnection({
-    host: process.env.DB_HOST || "127.0.0.1",
-    port: Number(process.env.DB_PORT || 3306),
-    user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
-    database: process.env.DB_NAME || "db_concert",
-    ssl: process.env.DB_SSL === "true" ? { minVersion: "TLSv1.2" } : undefined,
-    charset: "utf8mb4",
-  });
-try {
-  const [existing] = await connection.execute<UserRow[]>("SELECT id,level FROM user WHERE email=? LIMIT 1", [adminEmail]);
-  if (existing[0] && existing[0].level !== "admin") {
-    throw new Error("ADMIN_EMAIL belongs to an existing customer. Choose a different email; seed will not promote a customer silently.");
-  }
-  if (!existing[0]) {
-    const username = (process.env.ADMIN_USERNAME?.trim() || "melodytix_admin").slice(0, 100);
-    const hash = await bcrypt.hash(adminPassword, 12);
-    await connection.execute(
-      "INSERT INTO user (username,password,nama,email,level) VALUES (?,?,?,?, 'admin')",
-      [username, hash, process.env.ADMIN_NAME?.trim() || "MelodyTix Admin", adminEmail],
-    );
-    console.log(`Created admin account ${adminEmail}.`);
-  } else {
-    console.log(`Admin account ${adminEmail} already exists; password unchanged.`);
-  }
+  const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("Set DATABASE_URL_UNPOOLED or DATABASE_URL before seeding PostgreSQL.");
+  const client = new Client({ connectionString: postgresConnectionString(connectionString) });
+  await client.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query<UserRow>("SELECT id,level FROM \"user\" WHERE email=$1 LIMIT 1", [adminEmail]);
+    if (existing.rows[0] && existing.rows[0].level !== "admin") {
+      throw new Error("ADMIN_EMAIL belongs to an existing customer. Choose a different email; seed will not promote a customer silently.");
+    }
+    if (!existing.rows[0]) {
+      const username = (process.env.ADMIN_USERNAME?.trim() || "melodytix_admin").slice(0, 100);
+      const hash = await bcrypt.hash(adminPassword, 12);
+      await client.query(
+        "INSERT INTO \"user\" (username,password,nama,email,level) VALUES ($1,$2,$3,$4,'admin')",
+        [username, hash, process.env.ADMIN_NAME?.trim() || "MelodyTix Admin", adminEmail],
+      );
+      console.log(`Created admin account ${adminEmail}.`);
+    } else {
+      console.log(`Admin account ${adminEmail} already exists; password unchanged.`);
+    }
 
-  // Repair the sixth event from an early local seed that used an image not
-  // shipped with the new frontend. This updates only our marked demo row.
-  const replacement = demos[5];
-  const [replacementExists] = await connection.execute<RowDataPacket[]>(
-    "SELECT id FROM keranjang WHERE nama_konser=? LIMIT 1", [replacement.title],
-  );
-  if (!replacementExists.length) {
-    await connection.execute(
-      `UPDATE keranjang SET nama_konser=?,gambar=?,image_url=?,city=?,venue=?,harga=?,deskripsi=?
-       WHERE nama_konser='[DEMO] Seventeen — Cerita Kita' AND is_demo=1`,
-      [replacement.title, replacement.image, `/images/${replacement.image}`, replacement.city,
-        replacement.venue, replacement.price, replacement.description],
+    // Repair an early local demo row that referenced an image no longer shipped.
+    const replacement = demos[5];
+    const replacementExists = await client.query<{ id: number }>(
+      "SELECT id FROM keranjang WHERE nama_konser=$1 LIMIT 1", [replacement.title],
     );
-  }
+    if (!replacementExists.rows.length) {
+      await client.query(
+        `UPDATE keranjang SET nama_konser=$1,gambar=$2,image_url=$3,city=$4,venue=$5,harga=$6,deskripsi=$7
+         WHERE nama_konser='[DEMO] Seventeen — Cerita Kita' AND is_demo=1`,
+        [replacement.title, replacement.image, `/images/${replacement.image}`, replacement.city,
+          replacement.venue, replacement.price, replacement.description],
+      );
+    }
 
-  let created = 0;
-  for (const demo of demos) {
-    const [rows] = await connection.execute<RowDataPacket[]>(
-      "SELECT id FROM keranjang WHERE nama_konser=? LIMIT 1", [demo.title],
-    );
-    if (rows.length) continue;
-    await connection.execute(
-      `INSERT INTO keranjang
-       (nama_konser,waktu,gambar,harga,stok_tiket,deskripsi,venue,city,featured,is_demo,is_active,image_url)
-       VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`,
-      [demo.title, bangkokDatetime(demo.days), demo.image, demo.price, demo.stock,
-        demo.description, demo.venue, demo.city, Number(demo.featured), 1, `/images/${demo.image}`],
-    );
-    created++;
+    let created = 0;
+    for (const demo of demos) {
+      const rows = await client.query<{ id: number }>(
+        "SELECT id FROM keranjang WHERE nama_konser=$1 LIMIT 1", [demo.title],
+      );
+      if (rows.rows.length) continue;
+      await client.query(
+        `INSERT INTO keranjang
+         (nama_konser,waktu,gambar,harga,stok_tiket,deskripsi,venue,city,featured,is_demo,is_active,image_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11)`,
+        [demo.title, bangkokDatetime(demo.days), demo.image, demo.price, demo.stock,
+          demo.description, demo.venue, demo.city, Number(demo.featured), 1, `/images/${demo.image}`],
+      );
+      created++;
+    }
+    await client.query("COMMIT");
+    console.log(`Demo seed complete: ${created} new events; ${demos.length - created} already present.`);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    await client.end();
   }
-  console.log(`Demo seed complete: ${created} new events; ${demos.length - created} already present.`);
-} finally {
-  await connection.end();
-}
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

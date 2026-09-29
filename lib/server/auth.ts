@@ -1,8 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import type { RowDataPacket } from "mysql2";
-import { db } from "./db";
+import { db, type QueryResultRow } from "./db";
 import { fail } from "./http";
 
 const COOKIE = "melodytix_session";
@@ -16,14 +15,14 @@ export type AppUser = {
   role: "admin" | "customer";
 };
 
-type UserRow = RowDataPacket & { id: number; nama: string; username: string; email: string; level: string };
+type UserRow = QueryResultRow & { id: number; nama: string; username: string; email: string; level: string };
 
 export function toUser(row: UserRow): AppUser {
   return { id: row.id, name: row.nama, username: row.username, email: row.email, role: row.level === "admin" ? "admin" : "customer" };
 }
 
 export async function findUserById(id: number): Promise<AppUser | null> {
-  const [rows] = await db().execute<UserRow[]>("SELECT id,nama,username,email,level FROM `user` WHERE id=?", [id]);
+  const { rows } = await db().query<UserRow>('SELECT id,nama,username,email,level FROM "user" WHERE id=$1', [id]);
   return rows[0] ? toUser(rows[0]) : null;
 }
 
@@ -34,8 +33,8 @@ function hashToken(token: string): string {
 export async function currentUser(): Promise<AppUser | null> {
   const token = (await cookies()).get(COOKIE)?.value;
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
-  const [rows] = await db().execute<UserRow[]>(
-    "SELECT u.id,u.nama,u.username,u.email,u.level FROM sessions s JOIN `user` u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>NOW() LIMIT 1",
+  const { rows } = await db().query<UserRow>(
+    'SELECT u.id,u.nama,u.username,u.email,u.level FROM sessions s JOIN "user" u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>NOW() LIMIT 1',
     [hashToken(token)],
   );
   return rows[0] ? toUser(rows[0]) : null;
@@ -55,9 +54,7 @@ export async function requireAdmin(): Promise<AppUser> {
 
 export async function startSession(userId: number): Promise<void> {
   const token = randomBytes(32).toString("hex");
-  await db().execute("INSERT INTO sessions (token_hash,user_id,expires_at) VALUES (?,?,DATE_ADD(NOW(), INTERVAL 7 DAY))", [
-    hashToken(token), userId,
-  ]);
+  await db().query("INSERT INTO sessions (token_hash,user_id,expires_at) VALUES ($1,$2,NOW() + INTERVAL '7 days')", [hashToken(token), userId]);
   (await cookies()).set(COOKIE, token, {
     httpOnly: true,
     secure: process.env.COOKIE_SECURE === "true",
@@ -71,13 +68,13 @@ export async function endSession(): Promise<void> {
   const jar = await cookies();
   const token = jar.get(COOKIE)?.value;
   if (token && /^[a-f0-9]{64}$/.test(token)) {
-    await db().execute("DELETE FROM sessions WHERE token_hash=?", [hashToken(token)]);
+    await db().query("DELETE FROM sessions WHERE token_hash=$1", [hashToken(token)]);
   }
   jar.delete(COOKIE);
 }
 
 export async function revokeUserSessions(userId: number): Promise<void> {
-  await db().execute("DELETE FROM sessions WHERE user_id=?", [userId]);
+  await db().query("DELETE FROM sessions WHERE user_id=$1", [userId]);
 }
 
 export async function checkPassword(password: string, stored: string): Promise<{ valid: boolean; legacy: boolean }> {

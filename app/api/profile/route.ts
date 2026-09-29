@@ -15,11 +15,11 @@ export function PATCH(request: Request) {
     const input = profileSchema.parse(await readJson(request));
     const fields: string[] = [];
     const values: (string | number)[] = [];
-    if (input.name !== undefined) { fields.push("nama=?"); values.push(input.name); }
-    if (input.username !== undefined) { fields.push("username=?"); values.push(input.username); }
-    if (input.email !== undefined) { fields.push("email=?"); values.push(input.email.toLowerCase()); }
+    if (input.name !== undefined) { fields.push(`nama=$${values.length + 1}`); values.push(input.name); }
+    if (input.username !== undefined) { fields.push(`username=$${values.length + 1}`); values.push(input.username); }
+    if (input.email !== undefined) { fields.push(`email=$${values.length + 1}`); values.push(input.email.toLowerCase()); }
     values.push(user.id);
-    await db().execute(`UPDATE user SET ${fields.join(",")} WHERE id=?`, values);
+    await db().query(`UPDATE "user" SET ${fields.join(",")} WHERE id=$${values.length}`, values);
     return NextResponse.json({ user: await findUserById(user.id) });
   });
 }

@@ -1,44 +1,29 @@
 import { loadEnvConfig } from "@next/env";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import mysql from "mysql2/promise";
+import { Client } from "pg";
+import { postgresConnectionString } from "../lib/server/db";
 
 loadEnvConfig(process.cwd());
 
 async function main(): Promise<void> {
-  const databaseName = process.env.DB_NAME || "db_concert";
-  if (!/^[a-zA-Z0-9_]+$/.test(databaseName)) throw new Error("DB_NAME contains invalid characters.");
-  const connection = await mysql.createConnection({
-    host: process.env.DB_HOST || "127.0.0.1",
-    port: Number(process.env.DB_PORT || 3306),
-    user: process.env.DB_USER || "root",
-    password: process.env.DB_PASSWORD || "",
-    ssl: process.env.DB_SSL === "true" ? { minVersion: "TLSv1.2" } : undefined,
-    multipleStatements: false,
-    charset: "utf8mb4",
-  });
-
-  async function runSql(path: string): Promise<void> {
-    let sql = await readFile(resolve(path), "utf8");
-    if (path === "database/schema.sql") {
-      // The legacy bootstrap file names db_concert. The modern project honors
-      // DB_NAME while retaining the three original CREATE TABLE definitions.
-      sql = sql.replace(/CREATE DATABASE IF NOT EXISTS db_concert[\s\S]*?;/i, "").replace(/USE db_concert\s*;/i, "");
-    }
-    // Schema files intentionally contain no stored procedures or semicolons in strings.
-    for (const statement of sql.split(";").map((part) => part.trim()).filter(Boolean)) {
-      await connection.query(statement);
-    }
-  }
-
+  const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("Set DATABASE_URL_UNPOOLED or DATABASE_URL before migrating PostgreSQL.");
+  const client = new Client({ connectionString: postgresConnectionString(connectionString) });
+  await client.connect();
   try {
-    await connection.query(`CREATE DATABASE IF NOT EXISTS \`${databaseName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-    await connection.query(`USE \`${databaseName}\``);
-    await runSql("database/schema.sql");
-    await runSql("database/modern.sql");
-    console.log("MelodyTix database migration complete. Existing rows were preserved.");
+    const schema = await readFile(resolve("database/schema.sql"), "utf8");
+    const modern = await readFile(resolve("database/modern.sql"), "utf8");
+    await client.query("BEGIN");
+    await client.query(schema);
+    await client.query(modern);
+    await client.query("COMMIT");
+    console.log("MelodyTix PostgreSQL migration complete. Existing rows were preserved.");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
   } finally {
-    await connection.end();
+    await client.end();
   }
 }
 

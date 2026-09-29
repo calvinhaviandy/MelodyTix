@@ -1,6 +1,6 @@
 # MelodyTix
 
-MelodyTix adalah aplikasi tiket konser berbasis **Next.js 16, React 19, TypeScript, MariaDB/MySQL, dan Motion**. Konser bawaan berlabel `[DEMO]`; alur unggah bukti hanya untuk simulasi dan **tidak meminta transfer uang sungguhan**.
+MelodyTix adalah aplikasi tiket konser berbasis **Next.js 16, React 19, TypeScript, PostgreSQL (Neon), dan Motion**. Konser bawaan berlabel `[DEMO]`; alur unggah bukti hanya untuk simulasi dan **tidak meminta transfer uang sungguhan**.
 
 ## Fitur
 
@@ -13,7 +13,7 @@ MelodyTix adalah aplikasi tiket konser berbasis **Next.js 16, React 19, TypeScri
 ## Kebutuhan
 
 - Node.js 20.9 atau lebih baru dan npm.
-- MariaDB/MySQL lokal yang berjalan. Database default bernama `db_concert`.
+- Database PostgreSQL, misalnya cabang development Neon dari integrasi Vercel atau server PostgreSQL lokal.
 - Google Chrome jika ingin menjalankan pengujian browser Playwright.
 
 Tidak ada dependensi PHP, Composer, atau bundler lama untuk aplikasi baru.
@@ -27,14 +27,7 @@ npm install
 if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
 ```
 
-Isi `.env.local` dengan koneksi database dan `ADMIN_PASSWORD` yang kuat. File ini diabaikan Git. Untuk instalasi MariaDB via WinGet yang tidak memasang service, server dapat dijalankan di PowerShell dengan:
-
-```powershell
-$mariaHome = (Get-ChildItem "$env:ProgramFiles\MariaDB *" -Directory | Select-Object -First 1).FullName
-$mariaServer = Join-Path $mariaHome 'bin\mariadbd.exe'
-$mariaConfig = Join-Path $mariaHome 'data\my.ini'
-Start-Process -FilePath $mariaServer -ArgumentList @("--defaults-file=`"$mariaConfig`"", '--bind-address=127.0.0.1', '--innodb-buffer-pool-size=128M') -WindowStyle Hidden
-```
+Isi `DATABASE_URL` di `.env.local` dengan connection string PostgreSQL untuk **development** dan ganti `ADMIN_PASSWORD` dengan kata sandi kuat. URL Neon biasanya berisi `sslmode=require`; jika menggunakan PostgreSQL lokal tanpa TLS, hapus parameter itu. Gunakan cabang/database Neon terpisah dari Production saat mengembangkan atau menjalankan tes. Jika `DATABASE_URL_UNPOOLED` juga diisi, pastikan kedua URL menunjuk ke cabang/database yang sama karena skrip migrasi dan seed mengutamakan URL langsung. File `.env.local` diabaikan Git dan tidak boleh dibagikan.
 
 Jalankan migrasi, buat data demo, lalu mulai situs dari akar repository:
 
@@ -44,7 +37,7 @@ npm run db:seed
 npm run dev
 ```
 
-Buka [http://127.0.0.1:8000](http://127.0.0.1:8000). `npm run db:migrate` aman dijalankan ulang dan menambah kolom/tabel tanpa menghapus data lama. `npm run db:seed` aman dijalankan ulang; ia membuat enam konser demo dan satu admin dari `ADMIN_EMAIL`/`ADMIN_PASSWORD` bila belum ada. Akun lama dengan hash MD5 akan diperbarui ke bcrypt saat login berhasil.
+Buka [http://127.0.0.1:8000](http://127.0.0.1:8000). `npm run db:migrate` menyiapkan skema PostgreSQL dan aman dijalankan ulang. `npm run db:seed` membuat enam konser demo dan satu admin dari `ADMIN_EMAIL`/`ADMIN_PASSWORD` bila belum ada. Akun lama dengan hash MD5, jika diimpor dari sistem lama, akan diperbarui ke bcrypt saat login berhasil.
 
 Untuk menjalankan hasil build:
 
@@ -62,7 +55,7 @@ npm run typecheck
 npm run test:e2e
 ```
 
-Suite Playwright mencakup API serta alur browser desktop dan mobile. Pengujian membuat akun/pesanan khusus sementara dan membersihkannya setelah selesai. Jika situs berjalan di port lain, atur `E2E_BASE_URL` untuk sesi PowerShell tersebut.
+Suite Playwright mencakup API serta alur browser desktop dan mobile. Pengujian membuat akun/pesanan khusus sementara dan membersihkannya setelah selesai. Pastikan `DATABASE_URL` yang dibaca Playwright menunjuk ke **database yang sama** dengan situs lokal. Gunakan cabang/database development; jangan arahkan pengujian ke Production. Jika situs berjalan di port lain, atur `E2E_BASE_URL` untuk sesi PowerShell tersebut.
 
 ## Struktur utama
 
@@ -75,23 +68,22 @@ Suite Playwright mencakup API serta alur browser desktop dan mobile. Pengujian m
 
 ## Deploy ke Vercel
 
-Next.js dapat dideploy di Vercel, tetapi database MariaDB lokal (`127.0.0.1`) tidak dapat diakses dari Vercel Functions. Siapkan database MySQL yang dapat diakses melalui jaringan, misalnya TiDB Cloud Starter (kompatibel dengan MySQL), lalu jalankan `npm run db:migrate` dan `npm run db:seed` **terhadap database tersebut** dari mesin lokal sebelum menguji fitur situs. Data di database lokal tidak tersalin otomatis. Uji skema dan alur aplikasi pada penyedia database yang dipilih sebelum dipakai publik.
+Gunakan integrasi **Neon PostgreSQL** dari [Vercel Marketplace](https://vercel.com/marketplace/neon/neon). Buat resource Neon baru untuk proyek MelodyTix dan hubungkan ke lingkungan Production. Integrasi menyediakan `DATABASE_URL` secara otomatis; aplikasi memakainya untuk semua akses database. Pilih region Neon Singapore (`ap-southeast-1`) yang dekat dengan region fungsi Vercel `sin1` di `vercel.json`.
 
-Atur variabel berikut di **Vercel Project → Settings → Environment Variables** untuk lingkungan Production; isi Preview secara terpisah bila akan digunakan:
+Setelah resource terhubung, periksa **Vercel Project → Settings → Environment Variables** untuk Production:
 
 | Variabel | Isi |
 | --- | --- |
-| `DB_HOST`, `DB_PORT` | Host dan port database hosted, bukan `127.0.0.1` |
-| `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Kredensial dan nama database hosted |
-| `DB_SSL` | `true` untuk koneksi TLS ke database hosted |
+| `DATABASE_URL` | Connection string PostgreSQL dari integrasi Neon; wajib |
+| `DATABASE_URL_UNPOOLED` | Connection string langsung dari integrasi Neon; opsional untuk skrip migrasi/seed |
 | `COOKIE_SECURE` | `true` untuk domain HTTPS Vercel |
 
-Integrasi TiDB Cloud dari Vercel Marketplace mengisi `TIDB_HOST`, `TIDB_PORT`, `TIDB_USER`, `TIDB_PASSWORD`, dan `TIDB_DATABASE`. Aplikasi ini menggunakan nama `DB_*`, jadi tambahkan lima nilai tersebut sebagai variabel `DB_*` yang sesuai. File `.env.local` dan kredensial database tidak boleh di-commit. Perubahan variabel Vercel berlaku untuk deployment baru, jadi deploy ulang setelah mengubahnya.
+Jalankan `npm run db:migrate` dan `npm run db:seed` dari mesin lokal dengan `DATABASE_URL` yang menunjuk ke **database Neon Production** sebelum menguji deployment Production. Gunakan `ADMIN_PASSWORD` baru untuk admin Production. Variabel `ADMIN_EMAIL` dan `ADMIN_PASSWORD` hanya dipakai saat menjalankan seed; jangan simpan keduanya sebagai variabel runtime Vercel. Data dari MariaDB lama tidak tersalin otomatis ke PostgreSQL; skema dan data demo dibuat baru oleh perintah tersebut. Simpan URL database dan kredensial di luar Git.
 
-`ADMIN_EMAIL` dan `ADMIN_PASSWORD` hanya dipakai oleh `db:seed` pada mesin yang menjalankan perintah tersebut. Saat membuat admin di database hosted, gunakan kata sandi baru; jangan gunakan sandi admin demo lokal. Kedua variabel itu tidak diperlukan di runtime Vercel.
+Untuk Preview dan Development, hubungkan cabang/database Neon terpisah supaya perubahan skema dan data tes tidak memengaruhi Production. Perubahan variabel Vercel hanya berlaku untuk deployment baru; lakukan deploy ulang setelah menggantinya. [Vercel menjelaskan](https://vercel.com/docs/postgres) bahwa database PostgreSQL baru disediakan melalui integrasi Marketplace, dan [variabel lingkungan](https://vercel.com/docs/environment-variables) diinjeksi ke deployment berikutnya.
 
-Unggahan bukti simulasi dibatasi **4 MiB** agar tetap di bawah batas payload Vercel Functions sebesar 4,5 MB. Bukti disimpan dalam kolom `MEDIUMBLOB` database hosted, bukan di filesystem Vercel. Akun Hobby Vercel dibatasi untuk penggunaan pribadi nonkomersial; penjualan tiket sungguhan memerlukan paket yang sesuai dan integrasi pembayaran nyata.
+Unggahan bukti simulasi dibatasi **4 MiB** agar tetap di bawah batas payload Vercel Functions sebesar 4,5 MB. Bukti disimpan sebagai `BYTEA` dalam PostgreSQL, bukan di filesystem Vercel. Akun Hobby Vercel dibatasi untuk penggunaan pribadi nonkomersial; penjualan tiket sungguhan memerlukan paket yang sesuai dan integrasi pembayaran nyata.
 
 Nomor rekening pada aplikasi PHP lama adalah contoh dan tidak digunakan. Untuk menerima pembayaran nyata, integrasi penyedia pembayaran dan proses operasional perlu disiapkan secara terpisah.
 
-Pada demo lokal HTTP, biarkan `COOKIE_SECURE=false` dan `DB_SSL=false`. Pesanan yang menunggu verifikasi menahan stok sampai admin menyetujui atau menolaknya; penerapan publik memerlukan kebijakan kedaluwarsa/cancel tambahan.
+Pada demo lokal HTTP, biarkan `COOKIE_SECURE=false`; URL Neon tetap memakai TLS melalui `sslmode=require`. Pesanan yang menunggu verifikasi menahan stok sampai admin menyetujui atau menolaknya; penerapan publik memerlukan kebijakan kedaluwarsa/cancel tambahan.

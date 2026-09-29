@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-import type { ResultSetHeader } from "mysql2";
 import { requireAdmin } from "@/lib/server/auth";
 import { db } from "@/lib/server/db";
 import { assertSameOrigin, fail, readJson, safe } from "@/lib/server/http";
-import { getEvent, toEvent, toMysqlBangkok } from "@/lib/server/models";
+import { getEvent, toBangkokTimestamp, toEvent } from "@/lib/server/models";
 import { eventPatchSchema, parseEventDate, parseId } from "@/lib/server/validation";
 
 type Params = { params: Promise<{ id: string }> };
@@ -34,21 +33,21 @@ export function PATCH(request: Request, { params }: Params) {
     ];
     for (const [key, column] of entries) {
       const value = input[key];
-      if (value !== undefined) { fields.push(`${column}=?`); values.push(typeof value === "boolean" ? Number(value) : value); }
+      if (value !== undefined) { fields.push(`${column}=$${values.length + 1}`); values.push(typeof value === "boolean" ? Number(value) : value); }
     }
     if (input.startsAt !== undefined) {
       const date = parseEventDate(input.startsAt);
-      fields.push("waktu=?"); values.push(toMysqlBangkok(date));
+      fields.push(`waktu=$${values.length + 1}`); values.push(toBangkokTimestamp(date));
     }
     if (!fields.length) fail(400, "Tidak ada perubahan.");
     values.push(id);
     const withStockCheck = input.stock !== undefined;
     if (withStockCheck) values.push(input.expectedStock!);
-    const [result] = await db().execute<ResultSetHeader>(
-      `UPDATE keranjang SET ${fields.join(",")} WHERE id=?${withStockCheck ? " AND stok_tiket=?" : ""}`,
+    const result = await db().query(
+      `UPDATE keranjang SET ${fields.join(",")} WHERE id=$${fields.length + 1}${withStockCheck ? ` AND stok_tiket=$${fields.length + 2}` : ""}`,
       values,
     );
-    if (withStockCheck && result.affectedRows === 0) {
+    if (withStockCheck && result.rowCount === 0) {
       fail(409, "Stok berubah sejak formulir dibuka. Muat ulang konser sebelum menyimpan.");
     }
     return NextResponse.json({ event: toEvent((await getEvent(id, true))!) });
@@ -61,7 +60,7 @@ export function DELETE(request: Request, { params }: Params) {
     await requireAdmin();
     const id = parseId((await params).id);
     if (!(await getEvent(id))) fail(404, "Konser tidak ditemukan.");
-    await db().execute("UPDATE keranjang SET is_active=0 WHERE id=?", [id]);
+    await db().query("UPDATE keranjang SET is_active=0 WHERE id=$1", [id]);
     return NextResponse.json({ ok: true });
   });
 }

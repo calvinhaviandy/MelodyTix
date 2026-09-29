@@ -16,7 +16,7 @@ export function PATCH(request: Request, { params }: Params) {
     const target = await findUserById(id);
     if (!target) fail(404, "Pengguna tidak ditemukan.");
     if (actor.id === id && role !== "admin") fail(400, "Anda tidak dapat mencabut peran admin sendiri.");
-    await db().execute("UPDATE user SET level=? WHERE id=?", [role, id]);
+    await db().query('UPDATE "user" SET level=$1 WHERE id=$2', [role, id]);
     return NextResponse.json({ user: await findUserById(id) });
   });
 }

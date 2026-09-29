@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { loadEnvConfig } from "@next/env";
 import { expect, request as playwrightRequest, test, type APIRequestContext, type Page } from "@playwright/test";
-import mysql, { type RowDataPacket } from "mysql2/promise";
+import { Client } from "pg";
 
 loadEnvConfig(process.cwd());
 
@@ -84,47 +84,38 @@ test.describe("MelodyTix browser flows", () => {
 
   test.afterAll(async () => {
     await Promise.all(apiContexts.map((api) => api.dispose()));
-    const connection = await mysql.createConnection({
-      host: process.env.DB_HOST || "127.0.0.1",
-      port: Number(process.env.DB_PORT || 3306),
-      user: process.env.DB_USER || "root",
-      password: process.env.DB_PASSWORD || "",
-      database: process.env.DB_NAME || "db_concert",
-    });
+    if (!usernames.size && !eventTitles.size) return;
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) throw new Error("DATABASE_URL harus tersedia untuk pengujian E2E");
+    const connection = new Client({ connectionString });
+    await connection.connect();
     try {
       const userIds: number[] = [];
       const eventIds: number[] = [];
       for (const username of usernames) {
-        const [rows] = await connection.execute<(RowDataPacket & { id: number })[]>(
-          "SELECT id FROM `user` WHERE username=?", [username],
+        const { rows } = await connection.query<{ id: number }>(
+          'SELECT id FROM "user" WHERE username=$1', [username],
         );
         userIds.push(...rows.map((row) => row.id));
       }
       for (const title of eventTitles) {
-        const [rows] = await connection.execute<(RowDataPacket & { id: number })[]>(
-          "SELECT id FROM keranjang WHERE nama_konser=?", [title],
+        const { rows } = await connection.query<{ id: number }>(
+          "SELECT id FROM keranjang WHERE nama_konser=$1", [title],
         );
         eventIds.push(...rows.map((row) => row.id));
       }
-      await connection.beginTransaction();
+      await connection.query("BEGIN");
       if (userIds.length || eventIds.length) {
-        const clauses: string[] = [];
-        const params: number[] = [];
-        if (userIds.length) {
-          clauses.push(`user_id IN (${userIds.map(() => "?").join(",")})`);
-          params.push(...userIds);
-        }
-        if (eventIds.length) {
-          clauses.push(`event_id IN (${eventIds.map(() => "?").join(",")})`);
-          params.push(...eventIds);
-        }
-        await connection.execute(`DELETE FROM pesanan WHERE ${clauses.join(" OR ")}`, params);
+        await connection.query(
+          "DELETE FROM pesanan WHERE user_id = ANY($1::integer[]) OR event_id = ANY($2::integer[])",
+          [userIds, eventIds],
+        );
       }
-      for (const id of eventIds) await connection.execute("DELETE FROM keranjang WHERE id=?", [id]);
-      for (const id of userIds) await connection.execute("DELETE FROM `user` WHERE id=?", [id]);
-      await connection.commit();
+      await connection.query("DELETE FROM keranjang WHERE id = ANY($1::integer[])", [eventIds]);
+      await connection.query('DELETE FROM "user" WHERE id = ANY($1::integer[])', [userIds]);
+      await connection.query("COMMIT");
     } catch (error) {
-      await connection.rollback();
+      await connection.query("ROLLBACK");
       throw error;
     } finally {
       await connection.end();

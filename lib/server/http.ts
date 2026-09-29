@@ -17,10 +17,10 @@ export function respondError(error: unknown): NextResponse {
     return NextResponse.json({ error: error.issues[0]?.message || "Data tidak valid." }, { status: 400 });
   }
   if (typeof error === "object" && error && "code" in error) {
-    if (error.code === "ER_DUP_ENTRY") {
+    if (error.code === "23505") {
       return NextResponse.json({ error: "Username atau email sudah digunakan." }, { status: 409 });
     }
-    if (error.code === "ER_NO_REFERENCED_ROW_2") {
+    if (error.code === "23503") {
       return NextResponse.json({ error: "Data terkait tidak ditemukan." }, { status: 400 });
     }
   }
